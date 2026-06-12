@@ -1,0 +1,8 @@
+# native build artifacts
+Source~/GameInputBridge/*.obj
+Source~/GameInputBridge/*.lib
+Source~/GameInputBridge/*.exp
+Source~/GameInputBridge/*.pdb
+Source~/GameInputBridge/build/
+# the built DLL lives in Runtime/Plugins (committed); the Source~ copy is transient
+Source~/GameInputBridge/MS_GamepadBridge.dll
