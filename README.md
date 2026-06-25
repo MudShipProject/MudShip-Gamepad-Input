@@ -41,6 +41,40 @@ int   n    = MS_Gamepad.ConnectedCount;
 `GamepadInput` enum: `DPadUp/Down/Left/Right, A, B, X, Y, LB, RB, Start(≡), Menu(⧉),
 LStickPress, RStickPress, LStickX/Y, RStickX/Y, LT, RT`
 
+### コントローラの固定（差し直しで順番が変わる対策・ユニークID）
+
+スロット番号（0..N）は接続順なので差し直しで変わる。各コントローラには**同一PCで不変のユニークID**
+（GameInput の APP_LOCAL_DEVICE_ID）があるので、それで物理コントローラを固定選択できる。
+**同じ型番を複数使っても個体ごとに別ID**（VID/PIDや名前は同型だと一致するので個体識別には使えない）。
+
+```csharp
+string[] ids = MS_Gamepad.GetDeviceIds();     // 接続中の全ユニークID
+string   id  = MS_Gamepad.GetDeviceId(0);     // スロット0のユニークID（未接続は ""）
+string   nm  = MS_Gamepad.GetDeviceName(0);   // 表示名（Xboxパッドは空。機種により入る）
+int      idx = MS_Gamepad.GetIndexById(id);   // 保存IDから現在のスロットを引く（無ければ -1）
+```
+
+`GetState/GetButton/GetButtonDown/GetButtonUp/IsConnected` には **deviceId(string) 版オーバーロード**もあるので、
+`GetIndexById` を挟まず直接IDで読める（IDは接続時に1回キャッシュするので毎フレーム呼んでも軽い）:
+
+```csharp
+bool a = MS_Gamepad.GetButtonDown(savedId, GamepadInput.A);   // ID で直接指定
+```
+
+使い方の型: 最初にIDを保存 → 以降は ID 版で読むだけ。これで差し直しても同じ物理パッドを掴める。
+ID は同一PC・同一アプリで安定（別PCには引き継がれない）。**別のUSBポートに挿し直してもIDは不変**（実機確認済み）。
+
+### 振動
+
+```csharp
+MS_Gamepad.VibrateController(0,  0.8f, 0.5f);   // スロット0を 強さ0.8 で 0.5秒
+MS_Gamepad.VibrateController(id, 0.8f, 0.5f);   // deviceID(string) 版
+MS_Gamepad.VibrateController(id, 0f, 0f);       // 即停止
+```
+
+`(対象, 強さ0~1, 秒数)`。指定秒数（実時間）で自動停止。Xbox 360 は2モーター（低/高周波）を同強度で回す。
+⚠️ **前面時のみ動作**（アプリが非フォーカス＝背面だと振動は出ない＝OS仕様）。
+
 ### 動作確認
 
 空の GameObject に `MS_GamepadProbe` を付けて Play。

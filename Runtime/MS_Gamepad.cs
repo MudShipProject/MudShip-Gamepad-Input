@@ -31,9 +31,13 @@ public static class MS_Gamepad
 	[DllImport(Dll)] static extern int GIB_Init();
 	[DllImport(Dll)] static extern int GIB_Poll([Out] GamepadFrame[] frames, int maxCount);
 	[DllImport(Dll)] static extern void GIB_Shutdown();
+	[DllImport(Dll)] static extern int GIB_GetDeviceInfo(int index, out ushort vendorId, out ushort productId, [Out] byte[] id, [Out] byte[] name, int nameLen);
+	[DllImport(Dll)] static extern void GIB_SetRumble(int index, float low, float high);
 
 	static readonly GamepadFrame[] _frames = new GamepadFrame[MaxPads];
 	static readonly uint[] _prevButtons = new uint[MaxPads];
+	static readonly string[] _slotIds = new string[MaxPads];
+	static readonly float[] _rumbleUntil = new float[MaxPads];
 	static int _polledFrame = -1;
 	static bool _ready;
 	static bool _initTried;
@@ -97,15 +101,39 @@ public static class MS_Gamepad
 		_polledFrame = frame;
 		for (int i = 0; i < MaxPads; i++) _prevButtons[i] = _frames[i].buttons;
 		GIB_Poll(_frames, MaxPads);
+		float now = Time.unscaledTime;
+		for (int i = 0; i < MaxPads; i++)
+		{
+			if (_frames[i].connected != 0) { if (_slotIds[i] == null) _slotIds[i] = FetchDeviceId(i); }
+			else _slotIds[i] = null;
+
+			if (_rumbleUntil[i] > 0f && (_frames[i].connected == 0 || now >= _rumbleUntil[i]))
+			{
+				try { GIB_SetRumble(i, 0f, 0f); } catch { }
+				_rumbleUntil[i] = 0f;
+			}
+		}
+	}
+
+	static string FetchDeviceId(int index)
+	{
+		var id = new byte[32];
+		var name = new byte[128];
+		try { if (GIB_GetDeviceInfo(index, out _, out _, id, name, name.Length) == 0) return ""; }
+		catch (EntryPointNotFoundException) { return ""; }
+		return BitConverter.ToString(id).Replace("-", "");
 	}
 
 	static void Shutdown()
 	{
 		if (!_ready) return;
 		_ready = false;
+		for (int i = 0; i < MaxPads; i++) { try { GIB_SetRumble(i, 0f, 0f); } catch { } }
 		try { GIB_Shutdown(); } catch { }
 		Array.Clear(_frames, 0, _frames.Length);
 		Array.Clear(_prevButtons, 0, _prevButtons.Length);
+		Array.Clear(_slotIds, 0, _slotIds.Length);
+		Array.Clear(_rumbleUntil, 0, _rumbleUntil.Length);
 		_polledFrame = -1;
 	}
 
@@ -179,6 +207,109 @@ public static class MS_Gamepad
 			for (int i = 0; i < MaxPads; i++) if (_frames[i].connected != 0) c++;
 			return c;
 		}
+	}
+
+	// ===== deviceId（ユニークID文字列）指定のオーバーロード =====
+	// GetIndexById でスロットを解決してから int 版へ委譲。未接続なら既定値（0/false）。
+
+	/// deviceId 指定版。未接続なら 0。
+	public static float GetState(string deviceId, GamepadInput input)
+	{
+		int i = GetIndexById(deviceId);
+		return i < 0 ? 0f : GetState(i, input);
+	}
+
+	/// deviceId 指定版（押している間 true）。
+	public static bool GetButton(string deviceId, GamepadInput input)
+	{
+		int i = GetIndexById(deviceId);
+		return i >= 0 && GetButton(i, input);
+	}
+
+	/// deviceId 指定版（押した瞬間だけ true）。
+	public static bool GetButtonDown(string deviceId, GamepadInput input)
+	{
+		int i = GetIndexById(deviceId);
+		return i >= 0 && GetButtonDown(i, input);
+	}
+
+	/// deviceId 指定版（離した瞬間だけ true）。
+	public static bool GetButtonUp(string deviceId, GamepadInput input)
+	{
+		int i = GetIndexById(deviceId);
+		return i >= 0 && GetButtonUp(i, input);
+	}
+
+	/// deviceId のコントローラが接続中か。
+	public static bool IsConnected(string deviceId) => GetIndexById(deviceId) >= 0;
+
+	// ===== 振動（前面時のみ。背面では出ない＝OS仕様）=====
+
+	/// index のコントローラを strength(0~1) で seconds 秒(実時間)振動させ、自動で止める。
+	/// strength<=0 または seconds<=0 で即停止。
+	public static void VibrateController(int index, float strength, float seconds)
+	{
+		EnsureInit();
+		if (!_ready || index < 0 || index >= MaxPads) return;
+		strength = Mathf.Clamp01(strength);
+		bool on = strength > 0f && seconds > 0f;
+		try { GIB_SetRumble(index, on ? strength : 0f, on ? strength : 0f); }
+		catch (EntryPointNotFoundException) { return; }
+		_rumbleUntil[index] = on ? Time.unscaledTime + seconds : 0f;
+	}
+
+	/// deviceId 指定版。
+	public static void VibrateController(string deviceId, float strength, float seconds)
+	{
+		int i = GetIndexById(deviceId);
+		if (i >= 0) VibrateController(i, strength, seconds);
+	}
+
+	/// スロット index のコントローラのユニークID（同一PC上で差し直しても不変）。未接続は ""。
+	public static string GetDeviceId(int index)
+	{
+		EnsureInit();
+		Poll();
+		if (!_ready || index < 0 || index >= MaxPads) return "";
+		return _slotIds[index] ?? "";
+	}
+
+	/// 接続中の全コントローラのユニークIDを配列で返す（スロット昇順、未接続は含まない）。
+	public static string[] GetDeviceIds()
+	{
+		EnsureInit();
+		Poll();
+		if (!_ready) return Array.Empty<string>();
+		var ids = new System.Collections.Generic.List<string>();
+		for (int i = 0; i < MaxPads; i++)
+			if (!string.IsNullOrEmpty(_slotIds[i])) ids.Add(_slotIds[i]);
+		return ids.ToArray();
+	}
+
+	/// スロット index のコントローラの表示名。未接続は ""（Xboxパッドは空。機種により入る）。
+	public static string GetDeviceName(int index)
+	{
+		EnsureInit();
+		if (!_ready || index < 0 || index >= MaxPads) return "";
+		var id = new byte[32];
+		var name = new byte[128];
+		try { if (GIB_GetDeviceInfo(index, out _, out _, id, name, name.Length) == 0) return ""; }
+		catch (EntryPointNotFoundException) { return ""; }
+		int len = Array.IndexOf(name, (byte)0);
+		if (len < 0) len = name.Length;
+		return System.Text.Encoding.UTF8.GetString(name, 0, len);
+	}
+
+	/// 保存しておいたユニークID（GetDeviceId）から現在のスロット番号を引く。未接続は -1。
+	public static int GetIndexById(string deviceId)
+	{
+		if (string.IsNullOrEmpty(deviceId)) return -1;
+		EnsureInit();
+		Poll();
+		if (!_ready) return -1;
+		for (int i = 0; i < MaxPads; i++)
+			if (_slotIds[i] == deviceId) return i;
+		return -1;
 	}
 
 	// GameInputGamepadButtons のビット（ネイティブ GameInput.h と一致させる）

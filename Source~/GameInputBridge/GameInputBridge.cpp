@@ -16,6 +16,7 @@
 #include <wrl/client.h>
 #include <mutex>
 #include <cstdint>
+#include <cstring>
 #include <algorithm>
 
 using Microsoft::WRL::ComPtr;
@@ -134,6 +135,61 @@ extern "C" __declspec(dllexport) int GIB_Poll(GamepadFrame* out, int maxCount)
 		}
 	}
 	return n;
+}
+
+// デバイスのユニークID・VID/PID・表示名を取得（接続中なら 1 を返す）。
+// id = APP_LOCAL_DEVICE_ID（32バイト, 同一PC上で差し直しても不変）、name = UTF-8。
+extern "C" __declspec(dllexport) int GIB_GetDeviceInfo(
+	int index,
+	unsigned short* vendorId,
+	unsigned short* productId,
+	unsigned char* id,        // 32 バイトのバッファ
+	char* name,
+	int nameLen)
+{
+	if (vendorId)  *vendorId = 0;
+	if (productId) *productId = 0;
+	if (id) std::memset(id, 0, APP_LOCAL_DEVICE_ID_SIZE);
+	if (name && nameLen > 0) name[0] = '\0';
+	if (index < 0 || index >= kMaxPads) return 0;
+
+	std::lock_guard<std::mutex> lock(g_mutex);
+	IGameInputDevice* dev = g_slots[index].Get();
+	if (!dev) return 0;
+
+	const GameInputDeviceInfo* info = dev->GetDeviceInfo();
+	if (info)
+	{
+		if (vendorId)  *vendorId = info->vendorId;
+		if (productId) *productId = info->productId;
+		if (id) std::memcpy(id, info->deviceId.value, APP_LOCAL_DEVICE_ID_SIZE);
+
+		const GameInputString* dn = info->displayName;
+		if (name && nameLen > 0 && dn && dn->data && dn->sizeInBytes > 0)
+		{
+			int n = static_cast<int>(dn->sizeInBytes);
+			if (n > nameLen - 1) n = nameLen - 1;
+			std::memcpy(name, dn->data, static_cast<size_t>(n));
+			name[n] = '\0';
+		}
+	}
+	return 1;
+}
+
+// 指定スロットのコントローラを振動させる（low/high = 各モーター強度 0..1）。
+// 注意: GameInput 仕様上、アプリが前面の時だけ実際にモーターが回る（背面は無効）。
+extern "C" __declspec(dllexport) void GIB_SetRumble(int index, float low, float high)
+{
+	if (index < 0 || index >= kMaxPads) return;
+	std::lock_guard<std::mutex> lock(g_mutex);
+	IGameInputDevice* dev = g_slots[index].Get();
+	if (!dev) return;
+	GameInputRumbleParams p{};
+	p.lowFrequency  = low;
+	p.highFrequency = high;
+	p.leftTrigger   = 0.0f;
+	p.rightTrigger  = 0.0f;
+	dev->SetRumbleState(&p);
 }
 
 extern "C" __declspec(dllexport) void GIB_Shutdown()
