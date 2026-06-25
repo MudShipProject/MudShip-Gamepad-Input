@@ -1,112 +1,82 @@
+<div align="center">
+
 # MudShip Gamepad Input
 
-**Xboxコントローラを多数台（ソフト上限32）、完全バックグラウンドで読む** Unity パッケージ（Windows x64 専用）。
+Xbox コントローラーを最大 32 台接続・バックグラウンド動作を可能にする入力方式を提供する Unity パッケージ。
 
-XInput は4台まで・Windows.Gaming.Input はフォーカス必須、という両方の制限を
-**GameInput API + ネイティブプラグイン**で回避している。
+</div>
 
-- ✅ **台数制限は実質なし**（API上の制限なし。ソフト上限 `MaxPads=32`、物理側の天井は後述）
-- ✅ **完全バックグラウンド動作**（ウィンドウが非フォーカスでも入力を取得）
-- ✅ 正規 Xbox コントローラ（GIP / Xbox Wireless Adapter 含む）
-- ✅ トリガー独立アナログ（LT/RT 0〜1）、スティック ±1
-- ✅ 静的APIのみ・セットアップ不要（初回呼び出しで自動初期化）
+- 接続台数は最大 32 台
+- Unity 非フォーカス時も入力取得
+- 個体識別ユニーク ID
+
+---
 
 ## インストール
 
-`Packages/manifest.json` に追加（ローカル参照の例）:
-
-```json
-"com.yamamotoryo0212.gamepad-input": "file:../../../MudShip-Gamepad-Input"
+```
+https://github.com/MudShipProject/MudShip-Gamepad-Input.git
 ```
 
-または Package Manager → Add package from disk → この `package.json` を選択。
+---
 
-## 使い方
+## API
 
-```csharp
-// どこからでも呼ぶだけ（初期化・ポーリングは自動）
-float rt   = MS_Gamepad.GetState(0, GamepadInput.RT);        // トリガー 0..1
-float lx   = MS_Gamepad.GetState(0, GamepadInput.LStickX);   // スティック -1..1
-bool  a    = MS_Gamepad.GetButton(3, GamepadInput.A);        // 押している間 true
-bool  down = MS_Gamepad.GetButtonDown(0, GamepadInput.A);    // 押した瞬間の1フレームだけ true
-bool  up   = MS_Gamepad.GetButtonUp(0, GamepadInput.A);      // 離した瞬間の1フレームだけ true
-bool  on   = MS_Gamepad.IsConnected(7);
-int   n    = MS_Gamepad.ConnectedCount;
-```
+すべて `MS_Gamepad`（static クラス）のメンバー。初回呼び出しで自動初期化される。`deviceId` は `GetDeviceId` / `GetDeviceIds` が返すコントローラ固有の ID（同一 PC では差し直し・別ポートでも不変）で、スロット番号と違い物理個体を固定指定できる。
 
-※ `GetButtonDown/Up` はボタン専用（軸 `LStickX/Y` `LT/RT` 等を渡すと常に false）。
-※ どのスクリプトの `Update` から呼んでも同一フレーム内は一貫したスナップショットを参照する
-（フレームに1回だけポーリングする方式。Unity 標準 Input と同じ感覚で使える）。
+| 関数名 | 引数 | オーバーロード | 戻り値 | 説明 |
+|---|---|---|---|---|
+| `GetState` | `int index, GamepadInput input` | `string deviceId` | `float` | 入力の生値。軸（LStick/RStick の X/Y）は -1〜1、トリガー（LT/RT）は 0〜1、ボタンは押下 1・非押下 0。未接続/範囲外は 0。 |
+| `GetButton` | `int index, GamepadInput input` | `string deviceId` | `bool` | 押されている間 true（軸を渡すと値が 0 以外で true）。 |
+| `GetButtonDown` | `int index, GamepadInput input` | `string deviceId` | `bool` | 押した瞬間の 1 フレームだけ true。ボタン専用（軸は常に false）。 |
+| `GetButtonUp` | `int index, GamepadInput input` | `string deviceId` | `bool` | 離した瞬間の 1 フレームだけ true。ボタン専用（軸は常に false）。 |
+| `IsConnected` | `int index` | `string deviceId` | `bool` | 対象が接続中なら true。 |
+| `ConnectedCount` | （なし・プロパティ） | なし | `int` | 現在接続中の台数。 |
+| `GetDeviceId` | `int index` | なし | `string` | スロット index のユニーク ID（`APP_LOCAL_DEVICE_ID` 32 バイトの大文字 hex）。未接続は `""`。 |
+| `GetDeviceIds` | （なし） | なし | `string[]` | 接続中の全ユニーク ID（スロット昇順、未接続は除外）。 |
+| `GetDeviceName` | `int index` | なし | `string` | スロット index の表示名。Xbox パッドは空文字（機種により入る）。未接続は `""`。 |
+| `GetIndexById` | `string deviceId` | なし | `int` | 保存した ID から現在のスロット番号を取得。該当なしは -1。 |
+| `VibrateController` | `int index, float strength, float seconds` | `string deviceId` | `void` | 対象を強さ `strength`（0〜1）で `seconds` 秒（実時間）振動させ自動停止。`strength`≤0 か `seconds`≤0 で即停止。**前面時のみ動作**。 |
 
-`GamepadInput` enum: `DPadUp/Down/Left/Right, A, B, X, Y, LB, RB, Start(≡), Menu(⧉),
-LStickPress, RStickPress, LStickX/Y, RStickX/Y, LT, RT`
+定数 `MS_Gamepad.MaxPads`（`int` = 32）— スロット数の上限。`index` の有効範囲は `0`〜`MaxPads - 1`。
 
-### コントローラの固定（差し直しで順番が変わる対策・ユニークID）
+### GamepadInput
 
-スロット番号（0..N）は接続順なので差し直しで変わる。各コントローラには**同一PCで不変のユニークID**
-（GameInput の APP_LOCAL_DEVICE_ID）があるので、それで物理コントローラを固定選択できる。
-**同じ型番を複数使っても個体ごとに別ID**（VID/PIDや名前は同型だと一致するので個体識別には使えない）。
+| 値 | 種別 | 説明 |
+|---|---|---|
+| `DPadUp` | ボタン | 十字キー上 |
+| `DPadDown` | ボタン | 十字キー下 |
+| `DPadLeft` | ボタン | 十字キー左 |
+| `DPadRight` | ボタン | 十字キー右 |
+| `A` | ボタン | A |
+| `B` | ボタン | B |
+| `X` | ボタン | X |
+| `Y` | ボタン | Y |
+| `LB` | ボタン | 左バンパー |
+| `RB` | ボタン | 右バンパー |
+| `Start` | ボタン | ≡（メニュー）ボタン |
+| `Menu` | ボタン | ⧉（ビュー）ボタン |
+| `LStickPress` | ボタン | 左スティック押し込み |
+| `RStickPress` | ボタン | 右スティック押し込み |
+| `LStickX` | 軸 | 左スティック X（-1〜1） |
+| `LStickY` | 軸 | 左スティック Y（-1〜1） |
+| `RStickX` | 軸 | 右スティック X（-1〜1） |
+| `RStickY` | 軸 | 右スティック Y（-1〜1） |
+| `LT` | 軸 | 左トリガー（0〜1） |
+| `RT` | 軸 | 右トリガー（0〜1） |
 
-```csharp
-string[] ids = MS_Gamepad.GetDeviceIds();     // 接続中の全ユニークID
-string   id  = MS_Gamepad.GetDeviceId(0);     // スロット0のユニークID（未接続は ""）
-string   nm  = MS_Gamepad.GetDeviceName(0);   // 表示名（Xboxパッドは空。機種により入る）
-int      idx = MS_Gamepad.GetIndexById(id);   // 保存IDから現在のスロットを引く（無ければ -1）
-```
+---
 
-`GetState/GetButton/GetButtonDown/GetButtonUp/IsConnected` には **deviceId(string) 版オーバーロード**もあるので、
-`GetIndexById` を挟まず直接IDで読める（IDは接続時に1回キャッシュするので毎フレーム呼んでも軽い）:
-
-```csharp
-bool a = MS_Gamepad.GetButtonDown(savedId, GamepadInput.A);   // ID で直接指定
-```
-
-使い方の型: 最初にIDを保存 → 以降は ID 版で読むだけ。これで差し直しても同じ物理パッドを掴める。
-ID は同一PC・同一アプリで安定（別PCには引き継がれない）。**別のUSBポートに挿し直してもIDは不変**（実機確認済み）。
-
-### 振動
-
-```csharp
-MS_Gamepad.VibrateController(0,  0.8f, 0.5f);   // スロット0を 強さ0.8 で 0.5秒
-MS_Gamepad.VibrateController(id, 0.8f, 0.5f);   // deviceID(string) 版
-MS_Gamepad.VibrateController(id, 0f, 0f);       // 即停止
-```
-
-`(対象, 強さ0~1, 秒数)`。指定秒数（実時間）で自動停止。Xbox 360 は2モーター（低/高周波）を同強度で回す。
-⚠️ **前面時のみ動作**（アプリが非フォーカス＝背面だと振動は出ない＝OS仕様）。
-
-### 動作確認
-
-空の GameObject に `MS_GamepadProbe` を付けて Play。
-Console に毎秒ハートビート（`[HB] ...`）と、入力変化のあったパッドの行が出る。
-**背面テスト**: Play 中に別アプリをアクティブにしてパッドを操作し、ログが動き続ければOK。
-
-## 仕組み・注意点
+## 構成・制約
 
 ```
 Xbox パッド (GIP) → GameInput.dll → MS_GamepadBridge.dll → P/Invoke → MS_Gamepad (C#)
-                                    SetFocusPolicy(0x40) = 背面入力ON
 ```
 
-- 初回 API 呼び出し時に `Application.runInBackground = true` を自動設定する
-  （背面でポーリングループを止めないため。Player Settings の Run In Background も ON 推奨）
-- **Guide（Xboxロゴ）/ Share ボタンは取れない**（OS予約）
-- **台数の実際の天井は物理接続側**:
-  - **Xbox Wireless Adapter = 1個で最大8台**（無線の本命）
-  - アダプタの**複数挿しは Windows 10 でドライバ不具合報告あり**（片方が Code 10 で死ぬ）→ 8台超は**有線USB併用**が現実的
-  - **Bluetooth は Windows の制限で Xbox パッド1台のみ**なので注意
-- 対応: Windows x64（Editor / Standalone）。GameInput ランタイムは新しめの
-  Windows なら inbox（無い環境は [GameInput redist](https://www.nuget.org/packages/Microsoft.GameInput) を同梱）
-
-## ネイティブプラグインのビルド（C++を変更した時だけ）
-
-ソースは `Source~/GameInputBridge/`。Visual Studio 2022 (C++) + Windows SDK 10.0.26100 以降で:
-
-```bat
-Source~\GameInputBridge\build.bat
-```
-
-→ `Runtime/Plugins/x86_64/MS_GamepadBridge.dll` に自動配置される。
-詳細・ハマりどころは [Source~/GameInputBridge/README.md](Source~/GameInputBridge/README.md) を参照。
-
-⚠ Unity 起動中は DLL がロックされるため、差し替えは「Unity終了後」か「起動直後の Play 前」に。
+- 初回 API 呼び出し時に `Application.runInBackground = true` を自動設定（背面でポーリングを止めないため。Player Settings 側も ON 推奨）。
+- **Guide（Xbox ロゴ）/ Share ボタンは取得不可**（OS 予約）。
+- 台数の実上限は物理接続側:
+  - Xbox Wireless Adapter = 1 個で最大 8 台
+  - アダプタの複数挿しは Windows 10 でドライバ不具合報告あり（片方が Code 10）→ 8 台超は有線 USB 併用が現実的
+  - Bluetooth は Xbox パッド 1 台のみ（Windows 制限）
+- 対応: Windows x64（Editor / Standalone）。GameInput ランタイムは新しめの Windows なら inbox（無い環境向けに [GameInput redist](https://www.nuget.org/packages/Microsoft.GameInput) を同梱）。
